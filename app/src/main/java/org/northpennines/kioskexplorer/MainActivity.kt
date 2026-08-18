@@ -131,7 +131,10 @@ fun MainScreen(navController: NavHostController, modifier: Modifier = Modifier) 
 }
 
 @Composable
-fun VideoListScreen(navController: NavHostController, modifier: Modifier = Modifier) {
+fun VideoListScreen(
+    navController: NavHostController,
+    modifier: Modifier = Modifier
+) {
     val context = LocalContext.current
     var hasPermission by remember { mutableStateOf(false) }
     var videos by remember { mutableStateOf<List<VideoItem>>(emptyList()) }
@@ -144,12 +147,16 @@ fun VideoListScreen(navController: NavHostController, modifier: Modifier = Modif
 
     val permissionLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.RequestPermission()
-    ) { granted -> hasPermission = granted }
+    ) { granted ->
+        hasPermission = granted
+    }
 
     LaunchedEffect(Unit) {
-        val alreadyGranted = androidx.core.content.ContextCompat.checkSelfPermission(
-            context, permission
-        ) == PackageManager.PERMISSION_GRANTED
+        val alreadyGranted =
+            androidx.core.content.ContextCompat.checkSelfPermission(
+                context,
+                permission
+            ) == PackageManager.PERMISSION_GRANTED
 
         if (alreadyGranted) {
             hasPermission = true
@@ -164,34 +171,69 @@ fun VideoListScreen(navController: NavHostController, modifier: Modifier = Modif
         }
     }
 
-    Column(modifier = modifier.fillMaxSize().padding(16.dp)) {
-        Button(
-            onClick = { navController.popBackStack() },
-            modifier = Modifier.padding(bottom = 16.dp)
-        ) {
-            Text("Back")
-        }
+    Column(
+        modifier = modifier
+            .fillMaxSize()
+            .padding(16.dp)
+    ) {
 
+        // Video list area
         if (!hasPermission) {
-            Text("Storage permission is needed to show videos.")
-        } else if (videos.isEmpty()) {
-            Text("No videos found in Movies/Kiosk Videos.\nAdd .mp4 files to that folder on the device.")
-        } else {
-            LazyColumn {
-                items(videos) { video ->
-                    val context = LocalContext.current
 
-                    val thumbnailState = produceState<Bitmap?>(initialValue = null, video.uri) {
-                        value = loadVideoThumbnail(context, video.uri)
-                    }
+            Column(
+                modifier = Modifier.fillMaxSize(),
+                horizontalAlignment = Alignment.CenterHorizontally,
+                verticalArrangement = Arrangement.Center
+            ) {
+                Text("Storage permission is needed to show videos.")
+            }
+
+        } else if (videos.isEmpty()) {
+
+            Column(
+                modifier = Modifier.fillMaxSize(),
+                horizontalAlignment = Alignment.CenterHorizontally,
+                verticalArrangement = Arrangement.Center
+            ) {
+                Text(
+                    "No videos found in Movies/Kiosk Videos.\n" +
+                            "Add .mp4 files to that folder on the device.",
+                    textAlign = TextAlign.Center
+                )
+            }
+
+        } else {
+
+            LazyColumn(
+                modifier = Modifier.weight(1f)
+            ) {
+                items(videos) { video ->
+
+                    val thumbnailState =
+                        produceState<Bitmap?>(
+                            initialValue = null,
+                            video.uri
+                        ) {
+                            value = loadVideoThumbnail(
+                                context,
+                                video.uri
+                            )
+                        }
 
                     Card(
                         modifier = Modifier
                             .fillMaxWidth()
                             .padding(vertical = 6.dp)
                             .clickable {
-                                val encodedUri = URLEncoder.encode(video.uri.toString(), "UTF-8")
-                                navController.navigate("video_player/$encodedUri")
+                                val encodedUri =
+                                    URLEncoder.encode(
+                                        video.uri.toString(),
+                                        "UTF-8"
+                                    )
+
+                                navController.navigate(
+                                    "video_player/$encodedUri"
+                                )
                             }
                     ) {
                         Row(
@@ -200,8 +242,11 @@ fun VideoListScreen(navController: NavHostController, modifier: Modifier = Modif
                                 .padding(12.dp),
                             verticalAlignment = Alignment.CenterVertically
                         ) {
+
                             val bitmap = thumbnailState.value
+
                             if (bitmap != null) {
+
                                 Image(
                                     bitmap = bitmap.asImageBitmap(),
                                     contentDescription = video.displayName,
@@ -210,7 +255,9 @@ fun VideoListScreen(navController: NavHostController, modifier: Modifier = Modif
                                         .width(100.dp)
                                         .height(64.dp)
                                 )
+
                             } else {
+
                                 Box(
                                     modifier = Modifier
                                         .width(100.dp)
@@ -227,6 +274,17 @@ fun VideoListScreen(navController: NavHostController, modifier: Modifier = Modif
                     }
                 }
             }
+        }
+
+        // Fixed bottom button
+        Button(
+            onClick = {
+                navController.popBackStack()
+            },
+            modifier = Modifier
+                .padding(top = 12.dp)
+        ) {
+            Text("Back")
         }
     }
 }
