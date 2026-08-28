@@ -59,6 +59,7 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.width
 import androidx.compose.material3.CardDefaults
@@ -68,6 +69,8 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalView
+import androidx.compose.ui.text.TextStyle
+import androidx.compose.ui.text.rememberTextMeasurer
 import androidx.core.view.WindowCompat
 import androidx.core.view.WindowInsetsCompat
 import androidx.core.view.WindowInsetsControllerCompat
@@ -75,6 +78,13 @@ import androidx.core.view.WindowInsetsControllerCompat
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+
+        window.setBackgroundDrawable(
+            android.graphics.drawable.ColorDrawable(
+                android.graphics.Color.rgb(28, 66, 32)
+            )
+        )
+
         enableEdgeToEdge()
 
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
@@ -87,7 +97,10 @@ class MainActivity : ComponentActivity() {
         setContent {
             KioskExplorerTheme {
                 Scaffold(
-                    modifier = Modifier.fillMaxSize(),
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .background(Color(0xFF1C4220)),
+                    containerColor = Color(0xFF1C4220),
                     contentWindowInsets = WindowInsets(0, 0, 0, 0)
                 ) { innerPadding ->
                     AppNavHost(modifier = Modifier.padding(innerPadding))
@@ -158,16 +171,16 @@ fun MainScreen(navController: NavHostController, modifier: Modifier = Modifier) 
             Button(
                 onClick = { navController.navigate("video_list") },
                 shape = RoundedCornerShape(16.dp),
-                modifier = Modifier.size(130.dp)
+                modifier = Modifier.size(200.dp)
             ) {
-                Text("Video Player", fontSize = 16.sp, textAlign = TextAlign.Center)
+                Text("Video Player", fontSize = 24.sp, textAlign = TextAlign.Center)
             }
             Button(
                 onClick = { navController.navigate("url_list") },
                 shape = RoundedCornerShape(16.dp),
-                modifier = Modifier.size(130.dp)
+                modifier = Modifier.size(200.dp)
             ) {
-                Text("URL Launcher", fontSize = 16.sp, textAlign = TextAlign.Center)
+                Text("URL Launcher", fontSize = 24.sp, textAlign = TextAlign.Center)
             }
         }
     }
@@ -218,14 +231,14 @@ fun VideoListScreen(
         }
     }
 
-    Column(
+    Box(
         modifier = modifier
             .fillMaxSize()
             .padding(start = 16.dp, end = 16.dp, top = 16.dp, bottom = 4.dp)
     ) {
         if (!hasPermission) {
             Column(
-                modifier = Modifier.weight(1f),
+                modifier = Modifier.fillMaxSize(),
                 horizontalAlignment = Alignment.CenterHorizontally,
                 verticalArrangement = Arrangement.Center
             ) {
@@ -233,7 +246,7 @@ fun VideoListScreen(
             }
         } else if (videos.isEmpty()) {
             Column(
-                modifier = Modifier.weight(1f),
+                modifier = Modifier.fillMaxSize(),
                 horizontalAlignment = Alignment.CenterHorizontally,
                 verticalArrangement = Arrangement.Center
             ) {
@@ -244,7 +257,10 @@ fun VideoListScreen(
                 )
             }
         } else {
-            LazyColumn(modifier = Modifier.weight(1f)) {
+            LazyColumn(
+                modifier = Modifier.fillMaxSize(),
+                contentPadding = PaddingValues(bottom = 80.dp)
+            ) {
                 items(videos) { video ->
                     val thumbnailState =
                         produceState<Bitmap?>(initialValue = null, video.uri) {
@@ -254,7 +270,7 @@ fun VideoListScreen(
                     Card(
                         modifier = Modifier
                             .fillMaxWidth()
-                            .padding(vertical = 6.dp)
+                            .padding(vertical = 8.dp)
                             .clickable {
                                 val encodedUri =
                                     URLEncoder.encode(video.uri.toString(), "UTF-8")
@@ -267,7 +283,7 @@ fun VideoListScreen(
                         Row(
                             modifier = Modifier
                                 .fillMaxWidth()
-                                .padding(12.dp),
+                                .padding(20.dp),
                             verticalAlignment = Alignment.CenterVertically
                         ) {
                             val bitmap = thumbnailState.value
@@ -278,21 +294,21 @@ fun VideoListScreen(
                                     contentDescription = video.displayName,
                                     contentScale = ContentScale.Crop,
                                     modifier = Modifier
-                                        .width(100.dp)
-                                        .height(64.dp)
+                                        .width(160.dp)
+                                        .height(100.dp)
                                 )
                             } else {
                                 Box(
                                     modifier = Modifier
-                                        .width(100.dp)
-                                        .height(64.dp)
+                                        .width(160.dp)
+                                        .height(100.dp)
                                 )
                             }
 
                             Text(
                                 text = video.displayName,
-                                fontSize = 18.sp,
-                                modifier = Modifier.padding(start = 12.dp)
+                                fontSize = 26.sp,
+                                modifier = Modifier.padding(start = 20.dp)
                             )
                         }
                     }
@@ -303,38 +319,67 @@ fun VideoListScreen(
         Button(
             onClick = { navController.popBackStack() },
             contentPadding = PaddingValues(horizontal = 16.dp, vertical = 6.dp),
-            modifier = Modifier.padding(top = 4.dp)
+            modifier = Modifier
+                .align(Alignment.BottomStart)
+                .padding(16.dp)
         ) {
             Text("Back")
         }
     }
 }
 
-fun loadVideosFromFolder(context: android.content.Context, folderName: String): List<VideoItem> {
+fun loadVideosFromFolder(
+    context: android.content.Context,
+    folderName: String
+): List<VideoItem> {
     val videoList = mutableListOf<VideoItem>()
 
     val collection = MediaStore.Video.Media.EXTERNAL_CONTENT_URI
+
     val projection = arrayOf(
         MediaStore.Video.Media._ID,
         MediaStore.Video.Media.DISPLAY_NAME,
         MediaStore.Video.Media.RELATIVE_PATH
     )
 
-    val selection = "${MediaStore.Video.Media.RELATIVE_PATH} LIKE ?"
-    val selectionArgs = arrayOf("%$folderName%")
+    // Only allow:
+    // Movies/Kiosk Videos/
+    val selection = "${MediaStore.Video.Media.RELATIVE_PATH} = ?"
+    val selectionArgs = arrayOf("Movies/$folderName/")
 
     context.contentResolver.query(
-        collection, projection, selection, selectionArgs, null
+        collection,
+        projection,
+        selection,
+        selectionArgs,
+        null
     )?.use { cursor ->
-        val idColumn = cursor.getColumnIndexOrThrow(MediaStore.Video.Media._ID)
-        val nameColumn = cursor.getColumnIndexOrThrow(MediaStore.Video.Media.DISPLAY_NAME)
+
+        val idColumn =
+            cursor.getColumnIndexOrThrow(MediaStore.Video.Media._ID)
+
+        val nameColumn =
+            cursor.getColumnIndexOrThrow(MediaStore.Video.Media.DISPLAY_NAME)
 
         while (cursor.moveToNext()) {
             val id = cursor.getLong(idColumn)
             val rawName = cursor.getString(nameColumn)
-            val nameWithoutExtension = rawName.substringBeforeLast(".")
-            val contentUri = android.content.ContentUris.withAppendedId(collection, id)
-            videoList.add(VideoItem(contentUri, nameWithoutExtension))
+
+            val nameWithoutExtension =
+                rawName.substringBeforeLast(".")
+
+            val contentUri =
+                android.content.ContentUris.withAppendedId(
+                    collection,
+                    id
+                )
+
+            videoList.add(
+                VideoItem(
+                    contentUri,
+                    nameWithoutExtension
+                )
+            )
         }
     }
 
@@ -343,16 +388,20 @@ fun loadVideosFromFolder(context: android.content.Context, folderName: String): 
 
 fun loadVideoThumbnail(context: android.content.Context, videoUri: Uri): Bitmap? {
     return try {
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-            context.contentResolver.loadThumbnail(videoUri, android.util.Size(320, 240), null)
-        } else {
-            val id = android.content.ContentUris.parseId(videoUri)
-            @Suppress("DEPRECATION")
-            Thumbnails.getThumbnail(
-                context.contentResolver, id, Thumbnails.MINI_KIND, null
-            )
-        }
+        val retriever = android.media.MediaMetadataRetriever()
+
+        retriever.setDataSource(context, videoUri)
+
+        val bitmap = retriever.getFrameAtTime(
+            1_000_000L,
+            android.media.MediaMetadataRetriever.OPTION_CLOSEST_SYNC
+        )
+
+        retriever.release()
+
+        bitmap?.copy(Bitmap.Config.ARGB_8888, false)
     } catch (e: Exception) {
+        e.printStackTrace()
         null
     }
 }
@@ -420,12 +469,12 @@ fun VideoPlayerScreen(
 // ----------------------------
 
 @Composable
-fun UrlListScreen(navController: NavHostController, modifier: Modifier = Modifier) {
+fun UrlListScreen(
+    navController: NavHostController,
+    modifier: Modifier = Modifier
+) {
     val context = LocalContext.current
 
-    // isExternalStorageManager() requires API 30 (R). On older devices we
-    // fall back to treating permission as already available, since this
-    // app's minSdk (24) predates the All Files Access requirement.
     var hasPermission by remember {
         mutableStateOf(
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
@@ -435,6 +484,7 @@ fun UrlListScreen(navController: NavHostController, modifier: Modifier = Modifie
             }
         )
     }
+
     var urls by remember { mutableStateOf<List<UrlItem>>(emptyList()) }
 
     val permissionLauncher = rememberLauncherForActivityResult(
@@ -463,12 +513,35 @@ fun UrlListScreen(navController: NavHostController, modifier: Modifier = Modifie
         }
     }
 
+    val textMeasurer = androidx.compose.ui.text.rememberTextMeasurer()
+    val density = androidx.compose.ui.platform.LocalDensity.current
+
+    val cardWidth = urls.maxOfOrNull { urlItem ->
+        textMeasurer.measure(
+            text = urlItem.title,
+            style = androidx.compose.ui.text.TextStyle(
+                fontSize = 26.sp
+            )
+        ).size.width
+    }?.let { width ->
+        with(density) {
+            width.toDp() + 40.dp
+        }
+    } ?: 100.dp
+
     Column(
         modifier = modifier
             .fillMaxSize()
-            .padding(start = 16.dp, end = 16.dp, top = 16.dp, bottom = 4.dp)
+            .padding(
+                start = 16.dp,
+                end = 16.dp,
+                top = 16.dp,
+                bottom = 4.dp
+            ),
+        horizontalAlignment = Alignment.Start   // changed from CenterHorizontally
     ) {
         if (!hasPermission) {
+
             Column(
                 modifier = Modifier.weight(1f),
                 horizontalAlignment = Alignment.CenterHorizontally,
@@ -476,7 +549,9 @@ fun UrlListScreen(navController: NavHostController, modifier: Modifier = Modifie
             ) {
                 Text("File access permission is needed to load URLs.")
             }
+
         } else if (urls.isEmpty()) {
+
             Column(
                 modifier = Modifier.weight(1f),
                 horizontalAlignment = Alignment.CenterHorizontally,
@@ -487,42 +562,63 @@ fun UrlListScreen(navController: NavHostController, modifier: Modifier = Modifie
                     textAlign = TextAlign.Center
                 )
             }
+
         } else {
-            LazyColumn(modifier = Modifier.weight(1f)) {
+
+            LazyColumn(
+                modifier = Modifier.weight(1f),
+            ) {
                 items(urls) { urlItem ->
+
                     Card(
                         modifier = Modifier
                             .fillMaxWidth()
-                            .padding(vertical = 6.dp)
+                            .height(140.dp)
+                            .padding(horizontal = 64.dp, vertical = 8.dp)
                             .clickable {
-                                val encodedUrl = URLEncoder.encode(urlItem.url, "UTF-8")
-                                navController.navigate("url_launcher/$encodedUrl")
+                                val encodedUrl =
+                                    URLEncoder.encode(urlItem.url, "UTF-8")
+
+                                navController.navigate(
+                                    "url_launcher/$encodedUrl"
+                                )
                             },
                         colors = CardDefaults.cardColors(
                             containerColor = Color(0xFFB7DB57)
                         )
                     ) {
-                        Text(
-                            text = urlItem.title,
-                            fontSize = 18.sp,
+                        Box(
                             modifier = Modifier
-                                .fillMaxWidth()
-                                .padding(16.dp)
-                        )
+                                .fillMaxSize()
+                                .padding(20.dp),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Text(
+                                text = urlItem.title,
+                                fontSize = 26.sp,
+                                textAlign = TextAlign.Center
+                            )
+                        }
                     }
                 }
             }
         }
 
         Button(
-            onClick = { navController.popBackStack() },
-            contentPadding = PaddingValues(horizontal = 16.dp, vertical = 6.dp),
+            onClick = {
+                navController.popBackStack()
+            },
+            contentPadding = PaddingValues(
+                horizontal = 16.dp,
+                vertical = 6.dp
+            ),
             modifier = Modifier.padding(top = 4.dp)
         ) {
             Text("Back")
         }
     }
 }
+
 
 fun loadUrlsFromFile(): List<UrlItem> {
     val file = java.io.File(
