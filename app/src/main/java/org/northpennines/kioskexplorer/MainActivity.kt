@@ -80,6 +80,13 @@ import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.layout.layout
 import androidx.compose.ui.unit.Constraints
 import androidx.compose.ui.res.painterResource
+import android.content.BroadcastReceiver
+import android.content.Context
+import android.content.Intent
+import android.content.IntentFilter
+import android.media.AudioManager
+import androidx.core.content.ContextCompat
+import kotlin.math.roundToInt
 
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -510,9 +517,19 @@ fun VideoPlayerScreen(
     modifier: Modifier = Modifier
 ) {
     val view = LocalView.current
+    val context = LocalContext.current
 
-    var mediaPlayer by remember { mutableStateOf<android.media.MediaPlayer?>(null) }
-    var volume by remember { mutableStateOf(1f) }
+    val audioManager = remember {
+        context.getSystemService(Context.AUDIO_SERVICE) as AudioManager
+    }
+    val maxSystemVolume = remember { audioManager.getStreamMaxVolume(AudioManager.STREAM_MUSIC) }
+
+    // volume is a 0f..1f ratio derived from the current system stream volume.
+    var volume by remember {
+        mutableStateOf(
+            audioManager.getStreamVolume(AudioManager.STREAM_MUSIC) / maxSystemVolume.toFloat()
+        )
+    }
 
     DisposableEffect(Unit) {
         val window = (view.context as android.app.Activity).window
@@ -527,6 +544,28 @@ fun VideoPlayerScreen(
         }
     }
 
+    // Keep the slider in sync if the user presses the physical volume buttons
+    // while this screen is open.
+    DisposableEffect(Unit) {
+        val receiver = object : BroadcastReceiver() {
+            override fun onReceive(ctx: android.content.Context?, intent: Intent?) {
+                if (intent?.action == "android.media.VOLUME_CHANGED_ACTION") {
+                    volume = audioManager.getStreamVolume(AudioManager.STREAM_MUSIC) /
+                            maxSystemVolume.toFloat()
+                }
+            }
+        }
+        ContextCompat.registerReceiver(
+            context,
+            receiver,
+            IntentFilter("android.media.VOLUME_CHANGED_ACTION"),
+            ContextCompat.RECEIVER_NOT_EXPORTED
+        )
+        onDispose {
+            context.unregisterReceiver(receiver)
+        }
+    }
+
     Box(
         modifier = modifier
             .fillMaxSize()
@@ -537,17 +576,15 @@ fun VideoPlayerScreen(
                 .fillMaxSize()
                 .padding(vertical = 24.dp, horizontal = 64.dp)
                 .align(Alignment.Center),
-            factory = { context ->
-                VideoView(context).apply {
-                    val mediaController = android.widget.MediaController(context)
+            factory = { ctx ->
+                VideoView(ctx).apply {
+                    val mediaController = android.widget.MediaController(ctx)
                     mediaController.setAnchorView(this)
                     setMediaController(mediaController)
 
                     setVideoURI(videoUri)
                     setOnPreparedListener { mp ->
                         mp.isLooping = false
-                        mediaPlayer = mp
-                        mp.setVolume(volume, volume)
                     }
                     start()
                 }
@@ -561,6 +598,8 @@ fun VideoPlayerScreen(
                 .padding(16.dp)
         )
 
+        // Vertical volume slider with icon beneath it, right-hand side.
+        // This drives the SYSTEM media volume, not a per-player gain.
         Column(
             horizontalAlignment = Alignment.CenterHorizontally,
             modifier = Modifier
@@ -571,7 +610,12 @@ fun VideoPlayerScreen(
                 value = volume,
                 onValueChange = { newVolume ->
                     volume = newVolume
-                    mediaPlayer?.setVolume(newVolume, newVolume)
+                    val targetIndex = (newVolume * maxSystemVolume).roundToInt()
+                    audioManager.setStreamVolume(
+                        AudioManager.STREAM_MUSIC,
+                        targetIndex,
+                        0
+                    )
                 },
                 modifier = Modifier
                     .graphicsLayer {
