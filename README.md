@@ -1,4 +1,4 @@
-Kiosk Launcher with North Pennines National Landscape colour scheme.
+Video and URL launcher with North Pennines National Landscape colour scheme.
 
 Usage:
 Place videos in "Movies/Kiosk Videos/" with the file name that you want to appear in the app.
