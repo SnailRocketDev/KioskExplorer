@@ -53,13 +53,11 @@ import java.net.URLDecoder
 import java.net.URLEncoder
 import androidx.compose.foundation.clickable
 import android.graphics.Bitmap
-import android.provider.MediaStore.Video.Thumbnails
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.WindowInsets
-import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.width
 import androidx.compose.material3.CardDefaults
@@ -69,11 +67,13 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalView
-import androidx.compose.ui.text.TextStyle
-import androidx.compose.ui.text.rememberTextMeasurer
 import androidx.core.view.WindowCompat
 import androidx.core.view.WindowInsetsCompat
 import androidx.core.view.WindowInsetsControllerCompat
+import android.util.LruCache
+import android.util.Size
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -132,26 +132,60 @@ data class UrlItem(val title: String, val url: String)
 fun AppNavHost(modifier: Modifier = Modifier) {
     val navController = rememberNavController()
 
+    // Survives across screen transitions - this is the key to the fix.
+    var lastBackClickTime by remember { mutableStateOf(0L) }
+
+    val onBack: () -> Unit = {
+        val now = System.currentTimeMillis()
+        val currentRoute = navController.currentBackStackEntry?.destination?.route
+
+        // Debounce rapid double-taps AND never pop away from the start destination.
+        if (now - lastBackClickTime > 400L && currentRoute != "home") {
+            lastBackClickTime = now
+            navController.popBackStack()
+        }
+    }
+
     NavHost(navController = navController, startDestination = "home") {
-        composable("home") { MainScreen(navController, modifier) }
-        composable("video_list") { VideoListScreen(navController, modifier) }
+        composable("home") {
+            MainScreen(navController, modifier)
+        }
+        composable("video_list") {
+            VideoListScreen(navController = navController, onBack = onBack, modifier = modifier)
+        }
         composable(
             "video_player/{videoUri}",
             arguments = listOf(navArgument("videoUri") { type = NavType.StringType })
         ) { backStackEntry ->
             val encodedUri = backStackEntry.arguments?.getString("videoUri") ?: ""
             val decodedUri = URLDecoder.decode(encodedUri, "UTF-8")
-            VideoPlayerScreen(navController, Uri.parse(decodedUri), modifier)
+            VideoPlayerScreen(onBack = onBack, videoUri = Uri.parse(decodedUri), modifier = modifier)
         }
-        composable("url_list") { UrlListScreen(navController, modifier) }
+        composable("url_list") {
+            UrlListScreen(navController = navController, onBack = onBack, modifier = modifier)
+        }
         composable(
             "url_launcher/{targetUrl}",
             arguments = listOf(navArgument("targetUrl") { type = NavType.StringType })
         ) { backStackEntry ->
             val encodedUrl = backStackEntry.arguments?.getString("targetUrl") ?: ""
             val decodedUrl = URLDecoder.decode(encodedUrl, "UTF-8")
-            UrlLauncherScreen(navController, decodedUrl, modifier)
+            UrlLauncherScreen(onBack = onBack, targetUrl = decodedUrl, modifier = modifier)
         }
+    }
+}
+
+@Composable
+fun BackButton(
+    onBack: () -> Unit,
+    modifier: Modifier = Modifier
+) {
+    Button(
+        onClick = onBack,
+        contentPadding = PaddingValues(horizontal = 16.dp, vertical = 6.dp),
+        modifier = modifier
+    ) {
+        Text("Back")
     }
 }
 
@@ -173,14 +207,14 @@ fun MainScreen(navController: NavHostController, modifier: Modifier = Modifier) 
                 shape = RoundedCornerShape(16.dp),
                 modifier = Modifier.size(200.dp)
             ) {
-                Text("Video Player", fontSize = 24.sp, textAlign = TextAlign.Center)
+                Text("Watch our films", fontSize = 24.sp, textAlign = TextAlign.Center)
             }
             Button(
                 onClick = { navController.navigate("url_list") },
                 shape = RoundedCornerShape(16.dp),
                 modifier = Modifier.size(200.dp)
             ) {
-                Text("URL Launcher", fontSize = 24.sp, textAlign = TextAlign.Center)
+                Text("Explore our sites", fontSize = 24.sp, textAlign = TextAlign.Center)
             }
         }
     }
@@ -193,6 +227,7 @@ fun MainScreen(navController: NavHostController, modifier: Modifier = Modifier) 
 @Composable
 fun VideoListScreen(
     navController: NavHostController,
+    onBack: () -> Unit,
     modifier: Modifier = Modifier
 ) {
     val context = LocalContext.current
@@ -227,7 +262,11 @@ fun VideoListScreen(
 
     LaunchedEffect(hasPermission) {
         if (hasPermission) {
-            videos = loadVideosFromFolder(context, "Kiosk Videos")
+            // The MediaStore query is I/O work - keep it off the main thread
+            // so the screen doesn't hang while the list loads.
+            videos = withContext(Dispatchers.IO) {
+                loadVideosFromFolder(context, "Kiosk Videos")
+            }
         }
     }
 
@@ -261,16 +300,23 @@ fun VideoListScreen(
                 modifier = Modifier.fillMaxSize(),
                 contentPadding = PaddingValues(bottom = 80.dp)
             ) {
-                items(videos) { video ->
+                items(videos, key = { it.uri.toString() }) { video ->
                     val thumbnailState =
-                        produceState<Bitmap?>(initialValue = null, video.uri) {
-                            value = loadVideoThumbnail(context, video.uri)
+                        produceState<Bitmap?>(initialValue = ThumbnailCache.get(video.uri), video.uri) {
+                            // Skip work entirely if it's already cached.
+                            if (value == null) {
+                                // Decoding is CPU/I/O heavy - do it off the main thread
+                                // so scrolling stays smooth.
+                                value = withContext(Dispatchers.IO) {
+                                    loadVideoThumbnail(context, video.uri)
+                                }
+                            }
                         }
 
                     Card(
                         modifier = Modifier
                             .fillMaxWidth()
-                            .padding(vertical = 8.dp)
+                            .padding(horizontal = 96.dp, vertical = 8.dp)
                             .clickable {
                                 val encodedUri =
                                     URLEncoder.encode(video.uri.toString(), "UTF-8")
@@ -316,15 +362,12 @@ fun VideoListScreen(
             }
         }
 
-        Button(
-            onClick = { navController.popBackStack() },
-            contentPadding = PaddingValues(horizontal = 16.dp, vertical = 6.dp),
+        BackButton(
+            onBack = onBack,
             modifier = Modifier
                 .align(Alignment.BottomStart)
                 .padding(16.dp)
-        ) {
-            Text("Back")
-        }
+        )
     }
 }
 
@@ -386,20 +429,85 @@ fun loadVideosFromFolder(
     return videoList
 }
 
-fun loadVideoThumbnail(context: android.content.Context, videoUri: Uri): Bitmap? {
-    return try {
+// Thumbnails are decoded once and kept here so scrolling back to an
+// item that's already been decoded is instant instead of re-decoding
+// the video frame from scratch every time.
+object ThumbnailCache {
+    // Small LRU so we don't hold onto bitmaps for a huge library forever,
+    // but recently-viewed thumbnails stay cheap to redisplay.
+    private val cache = LruCache<Uri, Bitmap>(60)
+
+    fun get(uri: Uri): Bitmap? = cache.get(uri)
+
+    fun put(uri: Uri, bitmap: Bitmap) {
+        cache.put(uri, bitmap)
+    }
+}
+
+fun loadVideoThumbnail(
+    context: android.content.Context,
+    videoUri: Uri
+): Bitmap? {
+    ThumbnailCache.get(videoUri)?.let { return it }
+
+    val bitmap = try {
         val retriever = android.media.MediaMetadataRetriever()
 
         retriever.setDataSource(context, videoUri)
 
-        val bitmap = retriever.getFrameAtTime(
-            1_000_000L,
-            android.media.MediaMetadataRetriever.OPTION_CLOSEST_SYNC
-        )
+        val frame = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O_MR1) {
+            retriever.getScaledFrameAtTime(
+                1_000_000L,
+                android.media.MediaMetadataRetriever.OPTION_CLOSEST,
+                320,
+                200
+            )
+        } else {
+            retriever.getFrameAtTime(
+                1_000_000L,
+                android.media.MediaMetadataRetriever.OPTION_CLOSEST
+            )
+        }
 
         retriever.release()
 
-        bitmap?.copy(Bitmap.Config.ARGB_8888, false)
+        frame?.copy(Bitmap.Config.ARGB_8888, false)
+
+    } catch (e: Exception) {
+        e.printStackTrace()
+        null
+    }
+
+    bitmap?.let {
+        ThumbnailCache.put(videoUri, it)
+    }
+
+    return bitmap
+}
+
+private fun loadVideoThumbnailLegacy(context: android.content.Context, videoUri: Uri): Bitmap? {
+    return try {
+        val retriever = android.media.MediaMetadataRetriever()
+        retriever.setDataSource(context, videoUri)
+
+        // Request an already-downscaled frame instead of decoding at full
+        // resolution and shrinking afterwards - far less work per item.
+        val bitmap = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O_MR1) {
+            retriever.getScaledFrameAtTime(
+                1_000_000L,
+                android.media.MediaMetadataRetriever.OPTION_CLOSEST_SYNC,
+                320,
+                200
+            )
+        } else {
+            retriever.getFrameAtTime(
+                1_000_000L,
+                android.media.MediaMetadataRetriever.OPTION_CLOSEST_SYNC
+            )
+        }
+
+        retriever.release()
+        bitmap
     } catch (e: Exception) {
         e.printStackTrace()
         null
@@ -408,7 +516,7 @@ fun loadVideoThumbnail(context: android.content.Context, videoUri: Uri): Bitmap?
 
 @Composable
 fun VideoPlayerScreen(
-    navController: NavHostController,
+    onBack: () -> Unit,
     videoUri: Uri,
     modifier: Modifier = Modifier
 ) {
@@ -452,15 +560,12 @@ fun VideoPlayerScreen(
             }
         )
 
-        Button(
-            onClick = { navController.popBackStack() },
-            contentPadding = PaddingValues(horizontal = 16.dp, vertical = 6.dp),
+        BackButton(
+            onBack = onBack,
             modifier = Modifier
                 .align(Alignment.BottomStart)
                 .padding(16.dp)
-        ) {
-            Text("Back")
-        }
+        )
     }
 }
 
@@ -471,6 +576,7 @@ fun VideoPlayerScreen(
 @Composable
 fun UrlListScreen(
     navController: NavHostController,
+    onBack: () -> Unit,
     modifier: Modifier = Modifier
 ) {
     val context = LocalContext.current
@@ -513,22 +619,6 @@ fun UrlListScreen(
         }
     }
 
-    val textMeasurer = androidx.compose.ui.text.rememberTextMeasurer()
-    val density = androidx.compose.ui.platform.LocalDensity.current
-
-    val cardWidth = urls.maxOfOrNull { urlItem ->
-        textMeasurer.measure(
-            text = urlItem.title,
-            style = androidx.compose.ui.text.TextStyle(
-                fontSize = 26.sp
-            )
-        ).size.width
-    }?.let { width ->
-        with(density) {
-            width.toDp() + 40.dp
-        }
-    } ?: 100.dp
-
     Column(
         modifier = modifier
             .fillMaxSize()
@@ -538,7 +628,7 @@ fun UrlListScreen(
                 top = 16.dp,
                 bottom = 4.dp
             ),
-        horizontalAlignment = Alignment.Start   // changed from CenterHorizontally
+        horizontalAlignment = Alignment.Start
     ) {
         if (!hasPermission) {
 
@@ -604,21 +694,12 @@ fun UrlListScreen(
             }
         }
 
-        Button(
-            onClick = {
-                navController.popBackStack()
-            },
-            contentPadding = PaddingValues(
-                horizontal = 16.dp,
-                vertical = 6.dp
-            ),
+        BackButton(
+            onBack = onBack,
             modifier = Modifier.padding(top = 4.dp)
-        ) {
-            Text("Back")
-        }
+        )
     }
 }
-
 
 fun loadUrlsFromFile(): List<UrlItem> {
     val file = java.io.File(
@@ -648,7 +729,7 @@ fun loadUrlsFromFile(): List<UrlItem> {
 @SuppressLint("SetJavaScriptEnabled")
 @Composable
 fun UrlLauncherScreen(
-    navController: NavHostController,
+    onBack: () -> Unit,
     targetUrl: String,
     modifier: Modifier = Modifier
 ) {
@@ -711,15 +792,12 @@ fun UrlLauncherScreen(
             }
         )
 
-        Button(
-            onClick = { navController.popBackStack() },
-            contentPadding = PaddingValues(horizontal = 16.dp, vertical = 6.dp),
+        BackButton(
+            onBack = onBack,
             modifier = Modifier
                 .align(Alignment.BottomStart)
                 .padding(16.dp)
-        ) {
-            Text("Back")
-        }
+        )
     }
 }
 
