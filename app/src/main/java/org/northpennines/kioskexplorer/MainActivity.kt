@@ -71,9 +71,15 @@ import androidx.core.view.WindowCompat
 import androidx.core.view.WindowInsetsCompat
 import androidx.core.view.WindowInsetsControllerCompat
 import android.util.LruCache
-import android.util.Size
+import androidx.compose.material3.Icon
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
+import androidx.compose.material3.Slider
+import androidx.compose.ui.graphics.TransformOrigin
+import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.layout.layout
+import androidx.compose.ui.unit.Constraints
+import androidx.compose.ui.res.painterResource
 
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -132,14 +138,12 @@ data class UrlItem(val title: String, val url: String)
 fun AppNavHost(modifier: Modifier = Modifier) {
     val navController = rememberNavController()
 
-    // Survives across screen transitions - this is the key to the fix.
     var lastBackClickTime by remember { mutableStateOf(0L) }
 
     val onBack: () -> Unit = {
         val now = System.currentTimeMillis()
         val currentRoute = navController.currentBackStackEntry?.destination?.route
 
-        // Debounce rapid double-taps AND never pop away from the start destination.
         if (now - lastBackClickTime > 400L && currentRoute != "home") {
             lastBackClickTime = now
             navController.popBackStack()
@@ -189,6 +193,8 @@ fun BackButton(
     }
 }
 
+
+
 @Composable
 fun MainScreen(navController: NavHostController, modifier: Modifier = Modifier) {
     Column(
@@ -219,10 +225,6 @@ fun MainScreen(navController: NavHostController, modifier: Modifier = Modifier) 
         }
     }
 }
-
-// ----------------------------
-// VIDEO LIST SCREEN
-// ----------------------------
 
 @Composable
 fun VideoListScreen(
@@ -262,8 +264,6 @@ fun VideoListScreen(
 
     LaunchedEffect(hasPermission) {
         if (hasPermission) {
-            // The MediaStore query is I/O work - keep it off the main thread
-            // so the screen doesn't hang while the list loads.
             videos = withContext(Dispatchers.IO) {
                 loadVideosFromFolder(context, "Kiosk Videos")
             }
@@ -303,10 +303,7 @@ fun VideoListScreen(
                 items(videos, key = { it.uri.toString() }) { video ->
                     val thumbnailState =
                         produceState<Bitmap?>(initialValue = ThumbnailCache.get(video.uri), video.uri) {
-                            // Skip work entirely if it's already cached.
                             if (value == null) {
-                                // Decoding is CPU/I/O heavy - do it off the main thread
-                                // so scrolling stays smooth.
                                 value = withContext(Dispatchers.IO) {
                                     loadVideoThumbnail(context, video.uri)
                                 }
@@ -385,8 +382,6 @@ fun loadVideosFromFolder(
         MediaStore.Video.Media.RELATIVE_PATH
     )
 
-    // Only allow:
-    // Movies/Kiosk Videos/
     val selection = "${MediaStore.Video.Media.RELATIVE_PATH} = ?"
     val selectionArgs = arrayOf("Movies/$folderName/")
 
@@ -429,12 +424,8 @@ fun loadVideosFromFolder(
     return videoList
 }
 
-// Thumbnails are decoded once and kept here so scrolling back to an
-// item that's already been decoded is instant instead of re-decoding
-// the video frame from scratch every time.
+
 object ThumbnailCache {
-    // Small LRU so we don't hold onto bitmaps for a huge library forever,
-    // but recently-viewed thumbnails stay cheap to redisplay.
     private val cache = LruCache<Uri, Bitmap>(60)
 
     fun get(uri: Uri): Bitmap? = cache.get(uri)
@@ -490,8 +481,6 @@ private fun loadVideoThumbnailLegacy(context: android.content.Context, videoUri:
         val retriever = android.media.MediaMetadataRetriever()
         retriever.setDataSource(context, videoUri)
 
-        // Request an already-downscaled frame instead of decoding at full
-        // resolution and shrinking afterwards - far less work per item.
         val bitmap = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O_MR1) {
             retriever.getScaledFrameAtTime(
                 1_000_000L,
@@ -522,6 +511,9 @@ fun VideoPlayerScreen(
 ) {
     val view = LocalView.current
 
+    var mediaPlayer by remember { mutableStateOf<android.media.MediaPlayer?>(null) }
+    var volume by remember { mutableStateOf(1f) }
+
     DisposableEffect(Unit) {
         val window = (view.context as android.app.Activity).window
         val controller = WindowCompat.getInsetsController(window, view)
@@ -543,7 +535,7 @@ fun VideoPlayerScreen(
         AndroidView(
             modifier = Modifier
                 .fillMaxSize()
-                .padding(vertical = 24.dp)
+                .padding(vertical = 24.dp, horizontal = 64.dp)
                 .align(Alignment.Center),
             factory = { context ->
                 VideoView(context).apply {
@@ -552,8 +544,10 @@ fun VideoPlayerScreen(
                     setMediaController(mediaController)
 
                     setVideoURI(videoUri)
-                    setOnPreparedListener { mediaPlayer ->
-                        mediaPlayer.isLooping = false
+                    setOnPreparedListener { mp ->
+                        mp.isLooping = false
+                        mediaPlayer = mp
+                        mp.setVolume(volume, volume)
                     }
                     start()
                 }
@@ -566,12 +560,51 @@ fun VideoPlayerScreen(
                 .align(Alignment.BottomStart)
                 .padding(16.dp)
         )
+
+        Column(
+            horizontalAlignment = Alignment.CenterHorizontally,
+            modifier = Modifier
+                .align(Alignment.CenterEnd)
+                .padding(end = 12.dp)
+        ) {
+            Slider(
+                value = volume,
+                onValueChange = { newVolume ->
+                    volume = newVolume
+                    mediaPlayer?.setVolume(newVolume, newVolume)
+                },
+                modifier = Modifier
+                    .graphicsLayer {
+                        rotationZ = 270f
+                        transformOrigin = TransformOrigin(0f, 0f)
+                    }
+                    .layout { measurable, constraints ->
+                        val placeable = measurable.measure(
+                            Constraints(
+                                minWidth = constraints.minHeight,
+                                maxWidth = constraints.maxHeight,
+                                minHeight = constraints.minWidth,
+                                maxHeight = constraints.maxWidth,
+                            )
+                        )
+                        layout(placeable.height, placeable.width) {
+                            placeable.place(-placeable.width, 0)
+                        }
+                    }
+                    .width(220.dp)
+            )
+
+            Icon(
+                painter = painterResource(id = R.drawable.volume_up),
+                contentDescription = "Volume",
+                tint = Color.White,
+                modifier = Modifier
+                    .padding(top = 4.dp)
+                    .size(32.dp)
+            )
+        }
     }
 }
-
-// ----------------------------
-// URL LIST SCREEN
-// ----------------------------
 
 @Composable
 fun UrlListScreen(
@@ -734,7 +767,6 @@ fun UrlLauncherScreen(
     modifier: Modifier = Modifier
 ) {
     val allowedHost = Uri.parse(targetUrl).host ?: ""
-    // Get the base domain (last two parts) so subdomains of the same site are allowed
     val allowedBaseDomain = allowedHost.split(".").takeLast(2).joinToString(".")
 
     Box(modifier = modifier.fillMaxSize()) {
